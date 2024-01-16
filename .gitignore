@@ -1,0 +1,2 @@
+cmd/parse_csv/data/**/*.csv
+cmd/parse_csv/data/**/*.json

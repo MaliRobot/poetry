@@ -1,0 +1,7 @@
+https://www.kaggle.com/datasets/qianboao/chinesepoetrydataset - Chinese Poetry Dataset one line per poem
+https://www.kaggle.com/datasets/ahmedabelal/arabic-poetry - Arabic Poetry
+https://www.kaggle.com/datasets/theriley106/collection-of-poetry - Collection of Poetry
+https://www.kaggle.com/datasets/lisaameliewittmann/poems-data - poems_data
+https://www.kaggle.com/datasets/greencools/russianpoetry - russian-poetry-corpus
+https://www.kaggle.com/datasets/minitree/eurovision-song-lyrics - Lyrics of every Eurovision song in the history
+https://www.kaggle.com/datasets/mdanok/arabic-poetry-dataset - Arabic Poetry Dataset
