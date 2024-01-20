@@ -3,11 +3,10 @@ package db
 import (
 	"context"
 	"fmt"
-	"github.com/joho/godotenv"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"log"
-	"os"
+	"main/config"
 	"time"
 )
 
@@ -19,33 +18,12 @@ type MongoDBConnection struct {
 	Client   *mongo.Client
 }
 
-func loadEnv() error {
-	if err := godotenv.Load(); err != nil {
-		return fmt.Errorf("error loading .env file: %v", err)
-	}
-	return nil
-}
-
 func NewMongoDBConnection() (*MongoDBConnection, error) {
-	if err := loadEnv(); err != nil {
-		return nil, err
-	}
+	cfg := config.GetConfig()
 
-	// Access the environment variables
-	dbHost := os.Getenv("DB_HOST")
-	dbPort := os.Getenv("DB_PORT")
-	database := os.Getenv("DB_NAME")
-	dbUser := os.Getenv("DB_USER")
-	dbPass := os.Getenv("DB_PASS")
-
-	uri := fmt.Sprintf("mongodb://%s:%s", dbHost, dbPort)
+	uri := fmt.Sprintf("mongodb://%s:%s@%s:%s", cfg.DbUser, cfg.DbPass, cfg.DbHost, cfg.DbPort)
 
 	clientOptions := options.Client().ApplyURI(uri)
-
-	clientOptions.Auth = &options.Credential{
-		Username: dbUser,
-		Password: dbPass,
-	}
 
 	// Set a timeout for the connection attempt.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -66,7 +44,7 @@ func NewMongoDBConnection() (*MongoDBConnection, error) {
 
 	return &MongoDBConnection{
 		URI:      uri,
-		Database: database,
+		Database: cfg.DbName,
 		Client:   client,
 	}, nil
 }
