@@ -45,16 +45,6 @@ func main() {
 	r.GET("/collections", func(c *gin.Context) {
 		getCollections(c, mongoDBConnection)
 	})
-	r.GET("/index", func(c *gin.Context) {
-		err := db.ReindexData(mongoDBConnection.Client, esClient)
-
-		if err != nil {
-			c.JSON(500, gin.H{"error": err.Error()})
-			return
-		}
-
-		c.JSON(200, gin.H{"message": "Indexing successful"})
-	})
 	r.GET("/search", func(c *gin.Context) {
 		query := c.Query("q")
 		if query == "" {

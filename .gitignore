@@ -1,2 +1,7 @@
+# data files
 cmd/parse_csv/data/**/*.csv
 cmd/parse_csv/data/**/*.json
+
+# volumes
+elasticsearch_data/*
+mongodb_data/*

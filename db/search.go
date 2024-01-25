@@ -11,6 +11,7 @@ import (
 	configuration "main/config"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 func ConnectElasticsearch() (*elasticsearch.Client, error) {
@@ -22,7 +23,7 @@ func ConnectElasticsearch() (*elasticsearch.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-
+	fmt.Println("Connected to Elasticsearch!")
 	return client, nil
 }
 
@@ -61,12 +62,11 @@ func CreateIndex(esClient *elasticsearch.Client, indexName string) error {
 	return nil
 }
 
-func ReindexData(client *mongo.Client, esClient *elasticsearch.Client) error {
+func ReindexData(client *mongo.Client, esClient *elasticsearch.Client, dataset string, indexName string, numWorkers int) error {
 	cfg := configuration.GetConfig()
 	collection := client.Database(cfg.DbName).Collection("poems")
 
 	// Connect to Elasticsearch index
-	indexName := "poetry"
 	err := CreateIndex(esClient, indexName)
 	if err != nil {
 		return err
@@ -75,7 +75,7 @@ func ReindexData(client *mongo.Client, esClient *elasticsearch.Client) error {
 	// Retrieve data from MongoDB
 	filter := bson.D{{
 		Key:   "dataset",
-		Value: "kaggle-poetry-foundations-poems",
+		Value: dataset,
 	}}
 	cursor, err := collection.Find(context.TODO(), filter)
 	if err != nil {
@@ -89,41 +89,102 @@ func ReindexData(client *mongo.Client, esClient *elasticsearch.Client) error {
 		}
 	}(cursor, context.TODO())
 
-	// Iterate over MongoDB documents and index in Elasticsearch
+	// Prepare bulk request
+	var bulkRequest strings.Builder
+
+	// Wait group to wait for all workers to finish
+	var wg sync.WaitGroup
+
+	// Channel to signal completion of each worker
+	workerDone := make(chan struct{})
+
+	// Channel to send bulk requests to workers
+	bulkRequests := make(chan string, numWorkers)
+
+	// Start worker goroutines
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go worker(esClient, indexName, bulkRequests, workerDone, &wg)
+	}
+
+	// Iterate over MongoDB documents and append to bulk request
 	for cursor.Next(context.TODO()) {
 		var document bson.M
 		if err := cursor.Decode(&document); err != nil {
 			fmt.Println("reading err")
+			close(bulkRequests)
+			wg.Wait()
 			return err
 		}
 
 		delete(document, "_id")
 
-		// Index document in Elasticsearch
+		// Prepare the action line for the bulk request
+		bulkRequest.WriteString(fmt.Sprintf(`{"index":{"_index":"%s"}}%s`, indexName, "\n"))
+
+		// Convert document to JSON and append to bulk request
 		documentString, err := bson.MarshalExtJSON(document, false, false)
 		if err != nil {
+			close(bulkRequests)
+			wg.Wait()
 			return err
 		}
+		bulkRequest.WriteString(fmt.Sprintf("%s%s", string(documentString), "\n"))
 
-		indexRequest := esapi.IndexRequest{
+		// Send bulk request to workers when batch size is reached
+		if bulkRequest.Len() > 10*1024 { // Adjust the threshold based on your requirements
+			bulkRequests <- bulkRequest.String()
+			bulkRequest.Reset()
+		}
+	}
+
+	// Send any remaining documents as a final bulk request
+	if bulkRequest.Len() > 0 {
+		bulkRequests <- bulkRequest.String()
+	}
+
+	fmt.Println("Closing bulk request channel")
+
+	// Close the bulk request channel to signal workers to finish
+	close(bulkRequests)
+
+	fmt.Println("Waiting for workers to finish")
+
+	// Wait for all workers to finish
+	wg.Wait()
+
+	fmt.Println("Close workerDone channel")
+
+	// Close the workerDone channel to release any waiting goroutines
+	close(workerDone)
+
+	return nil
+}
+
+func worker(esClient *elasticsearch.Client, indexName string, bulkRequests <-chan string, workerDone chan<- struct{}, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	for bulkRequest := range bulkRequests {
+		// Send bulk request to Elasticsearch
+		response, err := esapi.BulkRequest{
 			Index:   indexName,
-			Body:    strings.NewReader(string(documentString)),
-			Refresh: "true",
-		}
-
-		// Send the index request
-		response, err := indexRequest.Do(context.Background(), esClient)
+			Body:    strings.NewReader(bulkRequest),
+			Refresh: "false",
+		}.Do(context.Background(), esClient)
 		if err != nil {
-			return err
+			fmt.Println("error during bulk indexing:", err)
+			return
 		}
 
 		// Check for errors in the response
 		if response.IsError() {
-			return fmt.Errorf("error indexing document: %s", response.String())
+			fmt.Printf("error during bulk indexing: %s\n", response.String())
+			return
 		}
 	}
 
-	return nil
+	// Signal completion to the main function
+	workerDone <- struct{}{}
 }
 
 func SearchData(esClient *elasticsearch.Client, query string) error {
