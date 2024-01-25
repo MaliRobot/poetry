@@ -154,7 +154,6 @@ func ReindexData(client *mongo.Client, esClient *elasticsearch.Client, dataset s
 			case bulkRequests <- bulkRequest.String():
 			default:
 				// Handle the case when the channel is closed
-				fmt.Println("closed 1")
 			}
 			bulkRequest.Reset()
 		}
@@ -166,7 +165,6 @@ func ReindexData(client *mongo.Client, esClient *elasticsearch.Client, dataset s
 		case bulkRequests <- bulkRequest.String():
 		default:
 			// Handle the case when the channel is closed
-			fmt.Println("closed 2")
 		}
 	}
 
@@ -207,13 +205,13 @@ processingLoop:
 				Refresh: "false",
 			}.Do(ctx, esClient)
 			if err != nil {
-				fmt.Println("error during bulk indexing:", err)
+				fmt.Println("Error during bulk request:", err)
 				break processingLoop
 			}
 
 			// Check for errors in the response
 			if response.IsError() {
-				fmt.Printf("error during bulk indexing: %s\n", response.String())
+				fmt.Printf("Error response after bulk request: %s\n", response.String())
 				break processingLoop
 			}
 
