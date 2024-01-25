@@ -25,7 +25,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Elasticsearch error while attempting to index data: %s", err)
 	}
-	err = db.ReindexData(mongoDBConnection.Client, esClient, dataset, indexName, 4)
+	err = db.ReindexData(mongoDBConnection.Client, esClient, dataset, indexName, 1)
 	if err != nil {
 		log.Fatalf("Failed indexing data: %s", err)
 	}

@@ -65,6 +65,7 @@ func CreateIndex(esClient *elasticsearch.Client, indexName string) error {
 func ReindexData(client *mongo.Client, esClient *elasticsearch.Client, dataset string, indexName string, numWorkers int) error {
 	cfg := configuration.GetConfig()
 	collection := client.Database(cfg.DbName).Collection("poems")
+	var once sync.Once
 
 	// Connect to Elasticsearch index
 	err := CreateIndex(esClient, indexName)
@@ -82,12 +83,12 @@ func ReindexData(client *mongo.Client, esClient *elasticsearch.Client, dataset s
 		fmt.Println("collection err")
 		return err
 	}
-	defer func(cursor *mongo.Cursor, ctx context.Context) {
-		err := cursor.Close(ctx)
+	defer func(cursor *mongo.Cursor) {
+		err := cursor.Close(context.TODO())
 		if err != nil {
-
+			// Handle or log the error
 		}
-	}(cursor, context.TODO())
+	}(cursor)
 
 	// Prepare bulk request
 	var bulkRequest strings.Builder
@@ -104,7 +105,11 @@ func ReindexData(client *mongo.Client, esClient *elasticsearch.Client, dataset s
 	// Start worker goroutines
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
-		go worker(esClient, indexName, bulkRequests, workerDone, &wg)
+
+		go func() {
+			defer wg.Done()
+			go worker(context.Background(), esClient, indexName, bulkRequests, workerDone, &wg)
+		}()
 	}
 
 	// Iterate over MongoDB documents and append to bulk request
@@ -112,8 +117,14 @@ func ReindexData(client *mongo.Client, esClient *elasticsearch.Client, dataset s
 		var document bson.M
 		if err := cursor.Decode(&document); err != nil {
 			fmt.Println("reading err")
+			select {
+			case bulkRequests <- bulkRequest.String():
+			default:
+				// Handle the case when the channel is closed
+				fmt.Println("closed -1")
+			}
 			close(bulkRequests)
-			wg.Wait()
+			wg.Done()
 			return err
 		}
 
@@ -125,6 +136,12 @@ func ReindexData(client *mongo.Client, esClient *elasticsearch.Client, dataset s
 		// Convert document to JSON and append to bulk request
 		documentString, err := bson.MarshalExtJSON(document, false, false)
 		if err != nil {
+			select {
+			case bulkRequests <- bulkRequest.String():
+			default:
+				// Handle the case when the channel is closed
+				fmt.Println("closed 0")
+			}
 			close(bulkRequests)
 			wg.Wait()
 			return err
@@ -133,27 +150,32 @@ func ReindexData(client *mongo.Client, esClient *elasticsearch.Client, dataset s
 
 		// Send bulk request to workers when batch size is reached
 		if bulkRequest.Len() > 10*1024 { // Adjust the threshold based on your requirements
-			bulkRequests <- bulkRequest.String()
+			select {
+			case bulkRequests <- bulkRequest.String():
+			default:
+				// Handle the case when the channel is closed
+				fmt.Println("closed 1")
+			}
 			bulkRequest.Reset()
 		}
 	}
 
 	// Send any remaining documents as a final bulk request
 	if bulkRequest.Len() > 0 {
-		bulkRequests <- bulkRequest.String()
+		select {
+		case bulkRequests <- bulkRequest.String():
+		default:
+			// Handle the case when the channel is closed
+			fmt.Println("closed 2")
+		}
 	}
 
-	fmt.Println("Closing bulk request channel")
-
 	// Close the bulk request channel to signal workers to finish
-	close(bulkRequests)
+	once.Do(func() {
+		close(bulkRequests)
+	})
 
-	fmt.Println("Waiting for workers to finish")
-
-	// Wait for all workers to finish
 	wg.Wait()
-
-	fmt.Println("Close workerDone channel")
 
 	// Close the workerDone channel to release any waiting goroutines
 	close(workerDone)
@@ -161,26 +183,45 @@ func ReindexData(client *mongo.Client, esClient *elasticsearch.Client, dataset s
 	return nil
 }
 
-func worker(esClient *elasticsearch.Client, indexName string, bulkRequests <-chan string, workerDone chan<- struct{}, wg *sync.WaitGroup) {
+func worker(ctx context.Context, esClient *elasticsearch.Client, indexName string, bulkRequests <-chan string, workerDone chan<- struct{}, wg *sync.WaitGroup) {
 	defer wg.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("Worker panic:", r)
+		}
+	}()
 
-	for bulkRequest := range bulkRequests {
-		// Send bulk request to Elasticsearch
-		response, err := esapi.BulkRequest{
-			Index:   indexName,
-			Body:    strings.NewReader(bulkRequest),
-			Refresh: "false",
-		}.Do(context.Background(), esClient)
-		if err != nil {
-			fmt.Println("error during bulk indexing:", err)
-			return
+processingLoop:
+	for {
+		select {
+		case bulkRequest, ok := <-bulkRequests:
+			if !ok {
+				// Channel closed, no more requests
+				break processingLoop
+			}
+
+			// Send bulk request to Elasticsearch
+			response, err := esapi.BulkRequest{
+				Index:   indexName,
+				Body:    strings.NewReader(bulkRequest),
+				Refresh: "false",
+			}.Do(ctx, esClient)
+			if err != nil {
+				fmt.Println("error during bulk indexing:", err)
+				break processingLoop
+			}
+
+			// Check for errors in the response
+			if response.IsError() {
+				fmt.Printf("error during bulk indexing: %s\n", response.String())
+				break processingLoop
+			}
+
+		case <-ctx.Done():
+			// Timeout reached, stop processing
+			break processingLoop
 		}
 
-		// Check for errors in the response
-		if response.IsError() {
-			fmt.Printf("error during bulk indexing: %s\n", response.String())
-			return
-		}
 	}
 
 	// Signal completion to the main function
