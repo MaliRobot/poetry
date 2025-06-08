@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 	"log"
-	"main/db"
 	"os"
+	"poetry/db"
 )
 
 func main() {
