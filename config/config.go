@@ -1,8 +1,6 @@
 package config
 
 import (
-	"github.com/joho/godotenv"
-	"log"
 	"os"
 	"sync"
 )
@@ -17,9 +15,9 @@ type Config struct {
 }
 
 func NewConfig() *Config {
-	if err := godotenv.Load(); err != nil {
-		log.Fatalf("error loading .env file: %v", err)
-	}
+	//if err := godotenv.Load(); err != nil {
+	//	log.Fatalf("error loading .env file: %v", err)
+	//}
 
 	return &Config{
 		DbHost:     os.Getenv("DB_HOST"),
