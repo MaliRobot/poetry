@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	db "poetry/db"
@@ -9,6 +10,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson"
 )
+
+var jobChan = make(chan []db.Poem, 10)
 
 func getCollections(c *gin.Context, connection *db.MongoDBConnection) {
 	collection, _ := db.GetCollection("poetry", "poems", connection)
@@ -25,6 +28,7 @@ func getCollections(c *gin.Context, connection *db.MongoDBConnection) {
 }
 
 type AddPoemRequest struct {
+	Dataset   string `json:"dataset"`
 	Title     string `json:"title" binding:"required"`
 	Poem      string `json:"poem" binding:"required"`
 	Poet      string `json:"poet"`
@@ -46,7 +50,7 @@ func addPoem(c *gin.Context, connection *db.MongoDBConnection) {
 	}
 
 	poem := db.Poem{
-		Dataset:   "",
+		Dataset:   req.Dataset,
 		DatasetId: req.DatasetId,
 		Title:     req.Title,
 		Poem:      req.Poem,
@@ -59,6 +63,57 @@ func addPoem(c *gin.Context, connection *db.MongoDBConnection) {
 	c.JSON(200, gin.H{"message": "Poem added successfully"})
 }
 
+func startWorker(connection *db.MongoDBConnection) {
+	go func() {
+		for poems := range jobChan {
+			var documents []interface{}
+			for _, p := range poems {
+				documents = append(documents, p)
+			}
+			collection, _ := db.GetCollection("poetry", "poems", connection)
+			db.InsertManyIntoDB(*collection, documents)
+		}
+	}()
+}
+
+func addPoems(c *gin.Context, connection *db.MongoDBConnection) {
+	file, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(400, gin.H{"error": "File is required"})
+		return
+	}
+	f, err := file.Open()
+	if err != nil {
+		c.JSON(500, gin.H{"error": "Unable to open file"})
+		return
+	}
+	defer f.Close()
+	var req []AddPoemRequest
+	if err := json.NewDecoder(f).Decode(&req); err != nil {
+		c.JSON(400, gin.H{"error": "Invalid JSON"})
+		return
+	}
+	var poems []db.Poem
+	for _, r := range req {
+		tags := []string{}
+		if r.Tags != "" {
+			tags = strings.Split(r.Tags, ",")
+		}
+		poem := db.Poem{
+			Dataset:   r.Dataset,
+			DatasetId: r.DatasetId,
+			Title:     r.Title,
+			Poem:      r.Poem,
+			Poet:      r.Poet,
+			Tags:      tags,
+			Language:  r.Language,
+		}
+		poems = append(poems, poem)
+	}
+	jobChan <- poems
+	c.JSON(200, gin.H{"message": "Poems scheduled for processing"})
+}
+
 func Start() {
 	mongoDBConnection, err := db.NewMongoDBConnection()
 
@@ -66,6 +121,8 @@ func Start() {
 		log.Fatal(err)
 	}
 	defer mongoDBConnection.Disconnect()
+
+	startWorker(mongoDBConnection)
 
 	esClient, err := db.ConnectElasticsearch()
 	if err != nil {
@@ -99,6 +156,9 @@ func Start() {
 	})
 	r.POST("/poem", func(c *gin.Context) {
 		addPoem(c, mongoDBConnection)
+	})
+	r.POST("/poems", func(c *gin.Context) {
+		addPoems(c, mongoDBConnection)
 	})
 	err = r.Run()
 	if err != nil {
