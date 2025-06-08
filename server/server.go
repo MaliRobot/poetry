@@ -1,17 +1,19 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
+	"os"
 	db "poetry/db"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson"
 )
-
-var jobChan = make(chan []db.Poem, 10)
 
 func getCollections(c *gin.Context, connection *db.MongoDBConnection) {
 	collection, _ := db.GetCollection("poetry", "poems", connection)
@@ -63,20 +65,46 @@ func addPoem(c *gin.Context, connection *db.MongoDBConnection) {
 	c.JSON(200, gin.H{"message": "Poem added successfully"})
 }
 
-func startWorker(connection *db.MongoDBConnection) {
-	go func() {
-		for poems := range jobChan {
-			var documents []interface{}
-			for _, p := range poems {
-				documents = append(documents, p)
-			}
-			collection, _ := db.GetCollection("poetry", "poems", connection)
-			db.InsertManyIntoDB(*collection, documents)
-		}
-	}()
+func sendJobToWorker(poems []db.Poem) error {
+	workerURL := getWorkerURL()
+
+	jsonData, err := json.Marshal(poems)
+	if err != nil {
+		return fmt.Errorf("failed to marshal poems: %v", err)
+	}
+
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+
+	resp, err := client.Post(workerURL+"/jobs", "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to send job to worker: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusAccepted {
+		return fmt.Errorf("worker rejected job with status: %d", resp.StatusCode)
+	}
+
+	return nil
 }
 
-func addPoems(c *gin.Context, connection *db.MongoDBConnection) {
+func getWorkerURL() string {
+	workerHost := os.Getenv("WORKER_HOST")
+	if workerHost == "" {
+		workerHost = "localhost"
+	}
+
+	workerPort := os.Getenv("WORKER_PORT")
+	if workerPort == "" {
+		workerPort = "8081"
+	}
+
+	return fmt.Sprintf("http://%s:%s", workerHost, workerPort)
+}
+
+func addPoems(c *gin.Context) {
 	file, err := c.FormFile("file")
 	if err != nil {
 		c.JSON(400, gin.H{"error": "File is required"})
@@ -110,7 +138,15 @@ func addPoems(c *gin.Context, connection *db.MongoDBConnection) {
 		}
 		poems = append(poems, poem)
 	}
-	jobChan <- poems
+
+	// Send job to worker service
+	err = sendJobToWorker(poems)
+	if err != nil {
+		log.Printf("Failed to send job to worker: %v", err)
+		c.JSON(503, gin.H{"error": "Worker service unavailable"})
+		return
+	}
+
 	c.JSON(200, gin.H{"message": "Poems scheduled for processing"})
 }
 
@@ -121,8 +157,6 @@ func Start() {
 		log.Fatal(err)
 	}
 	defer mongoDBConnection.Disconnect()
-
-	startWorker(mongoDBConnection)
 
 	esClient, err := db.ConnectElasticsearch()
 	if err != nil {
@@ -158,7 +192,7 @@ func Start() {
 		addPoem(c, mongoDBConnection)
 	})
 	r.POST("/poems", func(c *gin.Context) {
-		addPoems(c, mongoDBConnection)
+		addPoems(c)
 	})
 	err = r.Run()
 	if err != nil {

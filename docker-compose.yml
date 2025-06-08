@@ -26,6 +26,50 @@ services:
       - db
     networks:
       - esnet
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: poetry-worker
+    restart: always
+    ports:
+      - "8082:8082"
+    environment:
+      - WORKER_PORT=8082
+      - WORKER_BUFFER_SIZE=20
+      - WORKER_MAX_WORKERS=5
+      - DB_HOST=db
+      - DB_PORT=27017
+      - DB_USER=admin
+      - DB_PASS=secret
+      - DB_NAME=poetry
+    depends_on:
+      - db
+    networks:
+      - esnet
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: poetry-api
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      - WORKER_HOST=worker
+      - WORKER_PORT=8082
+      - DB_HOST=db
+      - DB_PORT=27017
+      - DB_USER=admin
+      - DB_PASS=secret
+      - DB_NAME=poetry
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+    depends_on:
+      - db
+      - elasticsearch
+      - worker
+    networks:
+      - esnet
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.11.4
     environment:
