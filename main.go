@@ -63,5 +63,9 @@ func main() {
 
 		c.JSON(200, gin.H{"message": "Search successful"})
 	})
-	r.Run() // listen and serve on 0.0.0.0:8080
+	err = r.Run()
+	if err != nil {
+		fmt.Printf("Error running the server: %v\n", err)
+		return
+	} // listen and serve on 0.0.0.0:8080
 }

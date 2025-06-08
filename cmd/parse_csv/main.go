@@ -216,7 +216,7 @@ func importPoemsData(mongoDBConnection db.MongoDBConnection) bool {
 
 	for {
 		record, err := reader.Read()
-		
+
 		if err != nil {
 			break
 		}
@@ -261,7 +261,12 @@ func importRussianPoetryCorpus(mongoDBConnection db.MongoDBConnection) bool {
 
 		db.InsertOnePoemIntoDB(mongoDBConnection, poem)
 	}
-	file.Close()
+	err = file.Close()
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	return true
 }
 
