@@ -8,8 +8,8 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"io"
-	configuration "main/config"
 	"net/http"
+	configuration "poetry/config"
 	"strings"
 	"sync"
 )
